@@ -8,3 +8,4 @@ async-trait="0.1"
 pingora = { version = "0.3.0", features = [ "lb" ] }
 pingora-core = {version="0.3.0"}
 http = "1.1.0"
+rand = "0.8"

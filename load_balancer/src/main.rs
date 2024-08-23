@@ -1,6 +1,8 @@
 use async_trait::async_trait;
+use rand::thread_rng;
+use rand::seq::SliceRandom;
 use pingora::prelude::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use pingora_core::services::background::background_service;
 
 use pingora_core::server::Server;
@@ -25,27 +27,49 @@ fn get_host(session: &mut Session) -> String {
 
 #[async_trait]
 impl ProxyHttp for LB {
-    type CTX = ();
+    type CTX =  Arc<Mutex<usize>>;
 
-    fn new_ctx(&self) -> () {
-        ()
+    fn new_ctx(&self) -> Self::CTX {
+        Arc::new(Mutex::new(0))
     }
-
-    async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut ()) -> Result<Box<HttpPeer>> {
-        let upstream = self.0
-            .select(b"", 256) // hash doesn't matter for round robin
-            .unwrap();
-
-        println!("upstream peer is: {upstream:?}");
-
-        // Get the RequestHeader
-
+    
+    async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut Self::CTX) -> Result<Box<HttpPeer>> {
         // Extract the "Host" header
         let sni = get_host(_session);
 
+        // Just round robin on defaults
+        // let upstream = self.0
+        //     .select(b"", 256) // hash doesn't matter for round robin
+        //     .unwrap();
+
+        println!("Host is: {sni:?}");
+        let upstream = match sni.as_str() {
+            "service1.example.com" => {
+                let service1_ips = vec![
+                    "1.1.1.1:443".to_string(),
+                    "1.0.0.1:443".to_string(),
+                ];
+                let mut rng = thread_rng();
+                let ip = service1_ips.choose(&mut rng).unwrap();
+                ip.clone()
+            },
+            "service2.example.com" => {
+                let service2_ips = vec![
+                    "8.8.8.8:443".to_string(),
+                    "8.8.4.4:443".to_string(),
+                ];
+                let mut rng = thread_rng();
+                let ip = service2_ips.choose(&mut rng).unwrap();
+                ip.clone()
+            },
+            _ => self.0.select(b"", 256).unwrap().to_string(),
+        };
+
+        println!("upstream peer is: {upstream:?}");
+
         // Set SNI
         // tls should be true if the upstream is https
-        let peer = Box::new(HttpPeer::new(upstream, false, sni));
+        let peer = Box::new(HttpPeer::new(upstream, true, sni));
         Ok(peer)
     }
 
@@ -60,6 +84,16 @@ impl ProxyHttp for LB {
         upstream_request.insert_header("Host", get_host(_session)).unwrap();
         Ok(())
     }
+
+    async fn request_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> Result<bool> {
+        if !session.req_header().uri.path().starts_with("/api/v1")
+        {
+            let _ = session.respond_error(403).await;
+            // true: tell the proxy that the response is already written
+            return Ok(true);
+        }
+        Ok(false)
+    }
 }
 
 fn main() {
@@ -69,7 +103,7 @@ fn main() {
     // Note that upstreams needs to be declared as `mut` now
     let mut upstreams =
         LoadBalancer::try_from_iter(["35.241.159.148:443", "35.241.159.148:80"]).unwrap();
-
+    
     let hc = TcpHealthCheck::new();
     upstreams.set_health_check(hc);
     upstreams.health_check_frequency = Some(std::time::Duration::from_secs(1));
