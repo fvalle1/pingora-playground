@@ -1,0 +1,11 @@
+services:
+  pingora:
+    build: .
+    image: pingora-lb
+    name: lb
+    ports:
+      - 80:6188
+      - 443:6189
+    volumes:
+      - $PWD/tmp:/tmp
+      - $PWD/load_balancer:/usr/src/load_balancer 
